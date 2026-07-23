@@ -87,10 +87,30 @@ def _normalize_result(raw):
     return None
 
 
+def _first_value(row, keys):
+    """Return the first aliased value that is present and non-empty.
+
+    Skips missing keys, None, and blank/whitespace strings, but keeps
+    other falsy values such as the integer 0 so a test literally named
+    "0" (or a "0"/False result cell) is not silently dropped.
+    """
+    for key in keys:
+        if key not in row:
+            continue
+        value = row[key]
+        if value is None:
+            continue
+        if isinstance(value, str) and value.strip() == "":
+            continue
+        return value
+    return None
+
+
 def load_runs(path):
     """Load CSV or JSON rows into normalized test-run dictionaries."""
     if path.lower().endswith(".json"):
-        with open(path, "r", encoding="utf-8") as fh:
+        # utf-8-sig transparently strips a leading BOM if present.
+        with open(path, "r", encoding="utf-8-sig") as fh:
             data = json.load(fh)
         if isinstance(data, dict):
             data = data.get("runs", data.get("results"))
@@ -100,7 +120,9 @@ def load_runs(path):
             )
         rows = data
     else:
-        with open(path, "r", encoding="utf-8", newline="") as fh:
+        # utf-8-sig strips the BOM that Excel/Sheets prepend to CSV exports,
+        # which would otherwise corrupt the first header (e.g. "test_id").
+        with open(path, "r", encoding="utf-8-sig", newline="") as fh:
             rows = list(csv.DictReader(fh))
 
     runs = []
@@ -108,20 +130,8 @@ def load_runs(path):
         if not isinstance(row, dict):
             continue
 
-        test_id = (
-            row.get("test_id")
-            or row.get("test")
-            or row.get("name")
-            or row.get("testId")
-            or row.get("id")
-        )
-        result_raw = (
-            row.get("result")
-            if "result" in row
-            else row.get("status")
-            if "status" in row
-            else row.get("outcome")
-        )
+        test_id = _first_value(row, ("test_id", "test", "name", "testId", "id"))
+        result_raw = _first_value(row, ("result", "status", "outcome"))
         if test_id is None or result_raw is None:
             continue
 
@@ -138,7 +148,7 @@ def load_runs(path):
                     if row.get("version") not in (None, "")
                     else None
                 ),
-                "timestamp": row.get("timestamp") or row.get("time") or row.get("date"),
+                "timestamp": _first_value(row, ("timestamp", "time", "date")),
                 "_order": index,
             }
         )
